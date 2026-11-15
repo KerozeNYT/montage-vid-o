@@ -4,6 +4,7 @@ import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {fade} from '@remotion/transitions/fade';
 import {slide} from '@remotion/transitions/slide';
 import {BRANDS} from './brands';
+import {BeforeAfter} from './components/BeforeAfter';
 import {MainVideo} from './components/MainVideo';
 import {Outro} from './components/Outro';
 import {Subtitles} from './components/Subtitles';
@@ -61,6 +62,11 @@ export const Montage: React.FC<MontageProps> = (props) => {
       <TransitionSeries>
         <TransitionSeries.Sequence durationInFrames={main}>
           <MainVideo video={props.video} cuts={props.cuts ?? []} duration={props.videoDuration} brand={brand} />
+          {(props.reveals ?? []).map((r, i) => (
+            <Sequence key={`rev-${i}`} from={Math.round(r.start * fps)} durationInFrames={Math.max(1, Math.round((r.end - r.start) * fps))}>
+              <BeforeAfter reveal={r} brand={brand} colors={colors} />
+            </Sequence>
+          ))}
           {(props.titles ?? []).map((ti, i) => {
             const from = Math.round(ti.start * fps);
             const len = Math.max(1, Math.round((ti.end - ti.start) * fps));
@@ -92,6 +98,11 @@ export const Montage: React.FC<MontageProps> = (props) => {
           <Outro brand={brand} colors={colors} logo={props.logo} />
         </TransitionSeries.Sequence>
       </TransitionSeries>
+      {(props.sfx ?? []).map((s, i) => (
+        <Sequence key={`sfx-${i}`} from={Math.max(0, Math.round(s.at * fps))} durationInFrames={Math.round(1.2 * fps)}>
+          <Audio src={staticFile(s.src)} volume={s.volume ?? 1} />
+        </Sequence>
+      ))}
       {props.music ? (
         <Audio
           src={staticFile(props.music)}

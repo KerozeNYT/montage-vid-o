@@ -6,6 +6,22 @@ export type Word = {text: string; start: number; end: number};
 /** Texte affiché à l'écran entre deux instants (secondes). */
 export type Title = {text: string; start: number; end: number};
 
+/** Révélation avant / après sur deux photos (temps en secondes, timeline principale). */
+export type Reveal = {
+  before: string;
+  after: string;
+  start: number;
+  end: number;
+  wipeStart: number;
+  wipeDuration: number;
+  positionX?: number;
+  positionY?: number;
+  caption?: string | null;
+};
+
+/** Effet sonore ponctuel (fichier du dossier public). */
+export type Sfx = {src: string; at: number; volume?: number};
+
 export type MontageProps = {
   brand: BrandId;
   /** Vidéo principale déjà coupée et cadrée, relative au dossier public. */
@@ -27,4 +43,8 @@ export type MontageProps = {
   font?: string | null;
   /** Remplace les couleurs de la marque (optionnel). */
   colors?: Partial<BrandColors> | null;
+  reveals?: Reveal[];
+  sfx?: Sfx[];
+  /** Cible de volume (LUFS) utilisée à l'export. */
+  loudness?: number;
 };

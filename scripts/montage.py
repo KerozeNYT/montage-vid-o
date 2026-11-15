@@ -35,6 +35,7 @@ FORMATS = {
     "16x9": (1920, 1080, "Paysage-16x9"),
 }
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".avi", ".mts", ".m2ts", ".webm", ".3gp"}
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 PROJECT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_(solar-car|solar-home)_[a-z0-9]+(-[a-z0-9]+)*_(9x16|1x1|16x9)$")
 HDR_TRANSFERS = {"arib-std-b67", "smpte2084"}
 VOCABULAIRE = {
@@ -202,8 +203,9 @@ def cmd_analyse(args: argparse.Namespace) -> None:
     if not src_dir.is_dir():
         die(f"dossier de rushs introuvable : {args.rushs}")
     videos = sorted(p for p in src_dir.iterdir() if p.suffix.lower() in VIDEO_EXT)
-    if not videos:
-        die(f"aucune vidéo dans {src_dir}")
+    photos = sorted(p for p in src_dir.iterdir() if p.suffix.lower() in IMAGE_EXT)
+    if not videos and not photos:
+        die(f"aucune vidéo ni photo dans {src_dir}")
 
     proj = WORK / args.projet
     out = proj / "analyse"
@@ -232,6 +234,13 @@ def cmd_analyse(args: argparse.Namespace) -> None:
             else:
                 lines.append("- (pas de voix détectée)")
             lines.append("")
+    if photos:
+        lines += ["## Photos", ""]
+    for ph in photos:
+        safe_copy(ph, proj / "src" / ph.name)
+        dims = run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", str(ph)],
+                   capture=True).strip()
+        lines.append(f"- `{ph.name}` — {dims} (à regarder directement)")
     rapport = out / "rapport.md"
     rapport.write_text("\n".join(lines))
     print(f"✔ Rapport : {rapport.relative_to(ROOT)}")
@@ -245,6 +254,9 @@ def video_filter(info: dict, w: int, h: int, plan: dict) -> str:
                      "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
     px, py = plan.get("position_x", 0.5), plan.get("position_y", 0.5)
     cover = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}:(iw-{w})*{px}:(ih-{h})*{py}"
+    vitesse = float(plan.get("vitesse", 1))
+    if vitesse != 1:
+        chain.append(f"setpts=PTS/{vitesse}")
     base = ",".join(chain) + "," if chain else ""
     if plan.get("cadrage", "remplir") == "flou":
         return (f"[0:v]{base}split[a][b];[a]{cover},boxblur=40:4[bg];"
@@ -272,22 +284,60 @@ def cmd_assembler(args: argparse.Namespace) -> None:
     plans_dir.mkdir(exist_ok=True)
     public.mkdir(exist_ok=True)
     pieces: list[Path] = []
+    reveals_raw: list[dict] = []
+    codecs = ["-c:v", "libx264", "-preset", "medium", "-crf", "16", "-c:a", "aac", "-b:a", "192k",
+              "-ar", "48000", "-ac", "2"]
+
+    def source(name: str, i: int) -> Path:
+        path = proj / "src" / name
+        if not path.exists():
+            die(f"plan {i} : {name} absent de work/{args.projet}/src (lancer « analyse » d'abord)")
+        return path
+
+    def photo_segment(img: Path, dur: float, p: dict, out: Path) -> None:
+        ffmpeg("-loop", "1", "-framerate", str(FPS), "-t", f"{dur:.3f}", "-i", str(img),
+               "-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo",
+               "-filter_complex", video_filter({}, w, h, p), "-map", "[v]", "-map", "1:a", *codecs,
+               "-shortest", str(out))
+
     for i, p in enumerate(plan["plans"], 1):
-        src = proj / "src" / p["src"]
-        if not src.exists():
-            die(f"plan {i} : {p['src']} absent de work/{args.projet}/src (lancer « analyse » d'abord)")
+        brut = plans_dir / f"{i:02d}.mp4"
+        # Révélation avant / après (deux photos) : fond = photo « avant », effet ajouté par Remotion.
+        if "avant_apres" in p:
+            aa, dur = p["avant_apres"], float(p.get("duree", 3.5))
+            avant, apres = source(aa["avant"], i), source(aa["apres"], i)
+            print(f"▶ plan {i} : avant/après {avant.name} → {apres.name} ({dur:.1f} s)")
+            photo_segment(avant, dur, p, brut)
+            reveals_raw.append({"index": i - 1, "before": avant, "after": apres, "plan": p})
+            pieces.append(brut)
+            continue
+        src = source(p["src"], i)
+        # Photo seule.
+        if src.suffix.lower() in IMAGE_EXT:
+            dur = float(p.get("duree", 2.0))
+            print(f"▶ plan {i} : photo {src.name} ({dur:.1f} s)")
+            photo_segment(src, dur, p, brut)
+            pieces.append(brut)
+            continue
         info = probe(src)
         debut = float(p.get("debut", 0))
         fin = min(float(p.get("fin", info["duree"])), info["duree"])
-        brut = plans_dir / f"{i:02d}.mp4"
+        vitesse = float(p.get("vitesse", 1))
+        if not 0.5 <= vitesse <= 2:
+            die(f"plan {i} : vitesse entre 0.5 et 2")
+        sortie = (fin - debut) / vitesse
         son = info["audio"] and p.get("son", True)
         cmd = ["-ss", f"{debut:.3f}", "-t", f"{fin - debut:.3f}", "-i", str(src)]
-        if not son:
-            cmd += ["-f", "lavfi", "-t", f"{fin - debut:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
-        cmd += ["-filter_complex", video_filter(info, w, h, p), "-map", "[v]", "-map", "0:a:0" if son else "1:a",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "16", "-c:a", "aac", "-b:a", "192k",
-                "-ar", "48000", "-ac", "2", "-shortest", str(brut)]
-        print(f"▶ plan {i} : {p['src']} {tc(debut)} → {tc(fin)}")
+        graph = video_filter(info, w, h, p)
+        if son:
+            graph += f";[0:a:0]atempo={vitesse}[a]" if vitesse != 1 else ";[0:a:0]anull[a]"
+            amap = "[a]"
+        else:
+            cmd += ["-f", "lavfi", "-t", f"{sortie:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
+            amap = "1:a"
+        cmd += ["-filter_complex", graph, "-map", "[v]", "-map", amap, *codecs, "-shortest", str(brut)]
+        ralenti = f" — vitesse ×{vitesse}" if vitesse != 1 else ""
+        print(f"▶ plan {i} : {p['src']} {tc(debut)} → {tc(fin)}{ralenti}")
         ffmpeg(*cmd)
         piece = brut
         if son and p.get("couper_blancs", True):
@@ -331,6 +381,38 @@ def cmd_assembler(args: argparse.Namespace) -> None:
         else:
             titres.append({"text": t["texte"], "start": t["debut"], "end": t["fin"]})
 
+    def to_public(src: Path, name: str) -> str:
+        dst = public / name
+        if dst.exists():
+            dst.unlink()
+        safe_copy(src, dst)
+        return name
+
+    reveals = []
+    for n, r in enumerate(reveals_raw, 1):
+        k, p = r["index"], r["plan"]
+        s0 = starts[k]
+        reveals.append({
+            "before": to_public(r["before"], f"avant_{n}{r['before'].suffix.lower()}"),
+            "after": to_public(r["after"], f"apres_{n}{r['after'].suffix.lower()}"),
+            # Le dernier plan va jusqu'au bout de la vidéo (évite une image « avant » juste avant l'outro).
+            "start": round(s0, 3), "end": round(duree if k == len(pieces) - 1 else s0 + durees[k], 3),
+            "wipeStart": round(s0 + float(p.get("balayage", 0.7)), 3),
+            "wipeDuration": float(p.get("duree_balayage", 1.0)),
+            "positionX": p.get("position_x", 0.5), "positionY": p.get("position_y", 0.5),
+            "caption": p.get("legende"),
+        })
+
+    # Effets sonores « whoosh » (générés ici, libres de droits) à chaque coupe et révélation.
+    sfx = []
+    if plan.get("effets_sonores", True):
+        whoosh = public / "whoosh.wav"
+        ffmpeg("-f", "lavfi", "-i", "anoisesrc=color=pink:duration=0.7:amplitude=0.7:sample_rate=48000",
+               "-af", "highpass=f=350,lowpass=f=6000,afade=t=in:st=0:d=0.42:curve=exp,"
+               "afade=t=out:st=0.42:d=0.28:curve=exp", "-ac", "2", str(whoosh))
+        moments = list(cuts) + [r["wipeStart"] + 0.15 for r in reveals] + [duree - 0.2]
+        sfx = [{"src": "whoosh.wav", "at": round(max(0.0, m - 0.4), 3), "volume": 0.8} for m in sorted(set(moments))]
+
     def asset(key: str, folder: str, auto: bool) -> str | None:
         path = plan.get(key)
         if not path and auto:
@@ -354,13 +436,16 @@ def cmd_assembler(args: argparse.Namespace) -> None:
         "hook": plan.get("accroche"), "hookDuration": plan.get("duree_accroche", 2.2), "titles": titres,
         "music": asset("musique", "musiques", auto=False), "musicVolume": plan.get("volume_musique", 0.3),
         "logo": asset("logo", "logos", auto=True), "font": asset("police", "polices", auto=True),
-        "colors": plan.get("couleurs"),
+        "colors": plan.get("couleurs"), "reveals": reveals, "sfx": sfx,
+        # Sans voix ni musique (effets seuls), on vise plus bas que −14 LUFS.
+        "loudness": -14 if (words or plan.get("musique")) else -18,
     }
     (proj / "props.json").write_text(json.dumps(props, ensure_ascii=False, indent=1))
     texte = " ".join(x["text"] for x in words)
     (proj / "sous-titres.txt").write_text(texte + "\n")
     print(f"✔ Vidéo principale : {tc(duree)} — {len(pieces)} plans — {len(words)} mots")
-    print(f"  Sous-titres à relire : work/{args.projet}/sous-titres.txt")
+    if words:
+        print(f"  Sous-titres à relire : work/{args.projet}/sous-titres.txt")
     print(f"  Paramètres Remotion : work/{args.projet}/props.json")
 
 
@@ -372,8 +457,8 @@ def browser() -> str | None:
     return found[-1] if found else None  # sinon Remotion télécharge le sien
 
 
-def loudnorm(src: Path, dst: Path) -> None:
-    target = "I=-14:TP=-1.5:LRA=11"
+def loudnorm(src: Path, dst: Path, lufs: float = -14) -> None:
+    target = f"I={lufs}:TP=-1.5:LRA=11"
     res = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(src), "-af", f"loudnorm={target}:print_format=json",
                           "-f", "null", "-"], text=True, capture_output=True)
     m = json.loads(res.stderr[res.stderr.rindex("{"):])
@@ -403,8 +488,9 @@ def cmd_rendu(args: argparse.Namespace) -> None:
     run(cmd, cwd=TEMPLATES)
     EXPORTS.mkdir(exist_ok=True)
     final = EXPORTS / f"{args.projet}.mp4"
-    print("▶ normalisation du son (−14 LUFS)")
-    loudnorm(rendu, final)
+    cible = json.loads(props.read_text()).get("loudness", -14)
+    print(f"▶ normalisation du son ({cible} LUFS)")
+    loudnorm(rendu, final, cible)
     print(f"✔ Export : {final.relative_to(ROOT)}")
 
 
@@ -430,22 +516,27 @@ def cmd_controle(args: argparse.Namespace) -> None:
     lufs = re.search(r"I:\s+(-?[\d.]+) LUFS", summary)
     peak = re.search(r"Peak:\s+(-?[\d.]+|-inf) dBFS", summary)
 
+    props = json.loads((proj / "props.json").read_text()) if (proj / "props.json").exists() else {}
+    cible = props.get("loudness", -14)
     checks = [
         ("Taille", f"{info['largeur']}×{info['hauteur']}", (info["largeur"], info["hauteur"]) == (w, h)),
         ("Cadence", f"{info['ips']} i/s", abs(info["ips"] - FPS) < 0.05),
         ("Codecs", ", ".join(codecs), codecs == ["aac", "h264"]),
         ("Durée", tc(info["duree"]), True),
-        ("Volume intégré", f"{lufs.group(1) if lufs else '?'} LUFS", bool(lufs) and abs(float(lufs.group(1)) + 14) <= 1.5),
+        ("Volume intégré", f"{lufs.group(1) if lufs else '?'} LUFS (cible {cible})", bool(lufs) and abs(float(lufs.group(1)) - cible) <= 1.5),
         ("Crête", f"{peak.group(1) if peak else '?'} dBTP", bool(peak) and (peak.group(1) == "-inf" or float(peak.group(1)) <= -1.0)),
     ]
 
-    # Images à regarder : début, accroche, chaque coupe, titres, fin de la vidéo, outro.
-    props = json.loads((proj / "props.json").read_text()) if (proj / "props.json").exists() else {}
+    # Images à regarder : début, accroche, chaque coupe, titres, révélations, fin de la vidéo, outro.
     times = {0.2: "debut", 1.0: "accroche", 2.0: "accroche-fin"}
     for i, c in enumerate(props.get("cuts", []), 2):
         times[c + 0.5] = f"plan{i:02d}"
     for i, t in enumerate(props.get("titles", []), 1):
         times[(t["start"] + t["end"]) / 2] = f"titre{i}"
+    for i, r in enumerate(props.get("reveals", []), 1):
+        mid = r["wipeStart"] + r["wipeDuration"] / 2
+        times[mid] = f"revelation{i}-balayage"
+        times[(r["wipeStart"] + r["wipeDuration"] + r["end"]) / 2] = f"revelation{i}-apres"
     main_end = props.get("videoDuration", info["duree"])
     times[max(main_end - 1.0, 0)] = "fin-video"
     times[info["duree"] - 0.6] = "outro"
