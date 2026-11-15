@@ -1,0 +1,21 @@
+{
+  "name": "solar-montage-templates",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Modèles Remotion : SOLAR CAR 37 et SOLAR HOME 37",
+  "scripts": {
+    "studio": "remotion studio",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.543",
+    "@remotion/transitions": "4.0.543",
+    "remotion": "4.0.543",
+    "react": "19.2.9",
+    "react-dom": "19.2.9"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "typescript": "5.9.3"
+  }
+}

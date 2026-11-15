@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Raccourci : ./montage <analyse|assembler|rendu|controle> ...
+PY=/opt/montage/bin/python
+[[ -x "$PY" ]] || PY=python3
+exec "$PY" "$(dirname "$0")/scripts/montage.py" "$@"

@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────
+# Sur GitHub : uniquement le code, les modèles et la doc.
+# Jamais de rushs, d'exports, ni de fichiers vidéo/audio.
+# ─────────────────────────────────────────────────────────────
+
+# Rushs bruts et vidéos finales (on garde seulement le dossier vide)
+rushs/*
+!rushs/.gitkeep
+exports/*
+!exports/.gitkeep
+
+# Copies de travail, transcriptions, images de contrôle
+work/
+
+# Vidéo (où qu'elle soit dans le dépôt)
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.m4v
+*.avi
+*.mkv
+*.webm
+*.mts
+*.MTS
+*.m2ts
+*.mxf
+*.3gp
+*.hevc
+*.insv
+*.lrv
+*.LRV
+*.thm
+*.THM
+*.braw
+*.r3d
+
+# Audio (musiques comprises : elles restent en local dans assets/)
+*.mp3
+*.wav
+*.WAV
+*.aac
+*.m4a
+*.flac
+*.ogg
+*.opus
+*.aif
+*.aiff
+*.caf
+
+# Projets / caches de montage
+*.prproj
+*.fcpbundle/
+*.drp
+
+# Modèles d'IA (téléchargés automatiquement, trop lourds)
+models/
+*.bin
+*.gguf
+*.safetensors
+*.npz
+
+# Node / Remotion
+node_modules/
+templates/out/
+templates/**/out/
+.remotion/
+
+# Python
+__pycache__/
+.venv/
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.Spotlight-V100
+.Trashes
